@@ -4,6 +4,8 @@ import hashlib
 import hmac
 import time
 import httpx
+from datetime import timedelta
+from .report import render_report, split_notification
 
 
 class FeishuAdapter:
@@ -53,12 +55,17 @@ class DeliveryService:
         if not report:
             return {'status': 'failed', 'error': 'report_missing'}
         text = report['text']
+        if report.get('summaries'):
+            previous = self.repository.get_report(day-timedelta(days=1))
+            text = render_report(day, report['summaries'], previous)
+            if report.get('complete') is False:
+                text = '【采集不完整】\n' + text
+        parts = split_notification(text)
         digest = hashlib.sha256(text.encode()).hexdigest()
         if force:
             digest += f':forced:{time.time_ns()}'
         if not self.repository.claim_delivery(str(day), 'feishu', digest):
             return {'status': 'skipped', 'error': 'already_claimed'}
-        parts = [text[i:i+3500] for i in range(0, len(text), 3500)]
         result = {'status': 'sent'}
         for index, part in enumerate(parts):
             result = await self.adapter.send(f'[{index+1}/{len(parts)}]\n{part}' if len(parts)>1 else part)

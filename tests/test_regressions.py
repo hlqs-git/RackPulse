@@ -41,7 +41,7 @@ def test_report_renders_actual_previous_day_delta():
     previous = copy.deepcopy(s)
     previous['power']['full_psu']['energy_kwh'] = 20
     report = render_report(date(2026, 11, 9), [s], {'summaries': [previous]})
-    assert '+4.000 kWh' in report
+    assert '+0.004 MWh' in report
 
 
 def test_device_state_does_not_merge_identities():
