@@ -1,0 +1,1 @@
+"""RackPulse daily infrastructure reporting."""

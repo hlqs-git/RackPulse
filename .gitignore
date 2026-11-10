@@ -1,0 +1,12 @@
+.venv/
+__pycache__/
+.pytest_cache/
+.env
+*.egg-info/
+.superpowers/
+*.db
+.pytest-tmp/
+.test*/
+config/racks.yaml
+deploy/k8s/racks.yaml
+deploy/k8s/secrets.env

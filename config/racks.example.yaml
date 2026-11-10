@@ -1,0 +1,164 @@
+{
+  "racks": [
+    {
+      "psu_vendor": null,
+      "gpu_host_pattern": null,
+      "rack_id": "GB200-1-1"
+    },
+    {
+      "psu_vendor": null,
+      "gpu_host_pattern": null,
+      "rack_id": "GB200-1-2"
+    },
+    {
+      "psu_vendor": null,
+      "gpu_host_pattern": null,
+      "rack_id": "GB200-1-3"
+    },
+    {
+      "psu_vendor": null,
+      "gpu_host_pattern": null,
+      "rack_id": "GB200-1-4"
+    },
+    {
+      "psu_vendor": null,
+      "gpu_host_pattern": null,
+      "rack_id": "GB200-1-5"
+    },
+    {
+      "psu_vendor": null,
+      "gpu_host_pattern": null,
+      "rack_id": "GB200-1-6"
+    },
+    {
+      "psu_vendor": null,
+      "gpu_host_pattern": null,
+      "rack_id": "GB200-1-7"
+    },
+    {
+      "psu_vendor": null,
+      "gpu_host_pattern": null,
+      "rack_id": "GB200-1-8"
+    },
+    {
+      "psu_vendor": null,
+      "gpu_host_pattern": null,
+      "rack_id": "GB200-1-9"
+    },
+    {
+      "psu_vendor": null,
+      "gpu_host_pattern": null,
+      "rack_id": "GB200-1-10"
+    },
+    {
+      "psu_vendor": null,
+      "gpu_host_pattern": null,
+      "rack_id": "GB200-1-11"
+    },
+    {
+      "psu_vendor": null,
+      "gpu_host_pattern": null,
+      "rack_id": "GB200-1-12"
+    },
+    {
+      "psu_vendor": null,
+      "gpu_host_pattern": null,
+      "rack_id": "GB200-1-13"
+    },
+    {
+      "psu_vendor": null,
+      "gpu_host_pattern": null,
+      "rack_id": "GB200-1-14"
+    },
+    {
+      "psu_vendor": null,
+      "gpu_host_pattern": null,
+      "rack_id": "GB200-1-15"
+    },
+    {
+      "psu_vendor": null,
+      "gpu_host_pattern": null,
+      "rack_id": "GB200-1-16"
+    },
+    {
+      "psu_vendor": null,
+      "gpu_host_pattern": null,
+      "rack_id": "GB200-2-1"
+    },
+    {
+      "psu_vendor": null,
+      "gpu_host_pattern": null,
+      "rack_id": "GB200-2-2"
+    },
+    {
+      "psu_vendor": null,
+      "gpu_host_pattern": null,
+      "rack_id": "GB200-2-3"
+    },
+    {
+      "psu_vendor": null,
+      "gpu_host_pattern": null,
+      "rack_id": "GB200-2-4"
+    },
+    {
+      "psu_vendor": null,
+      "gpu_host_pattern": null,
+      "rack_id": "GB200-2-5"
+    },
+    {
+      "psu_vendor": null,
+      "gpu_host_pattern": null,
+      "rack_id": "GB200-2-6"
+    },
+    {
+      "psu_vendor": null,
+      "gpu_host_pattern": "GB200-POD2-E15-.*",
+      "rack_id": "GB200-2-7"
+    },
+    {
+      "psu_vendor": null,
+      "gpu_host_pattern": null,
+      "rack_id": "GB200-2-8"
+    },
+    {
+      "psu_vendor": null,
+      "gpu_host_pattern": null,
+      "rack_id": "GB200-2-9"
+    },
+    {
+      "psu_vendor": null,
+      "gpu_host_pattern": null,
+      "rack_id": "GB200-2-10"
+    },
+    {
+      "psu_vendor": null,
+      "gpu_host_pattern": null,
+      "rack_id": "GB200-2-11"
+    },
+    {
+      "psu_vendor": null,
+      "gpu_host_pattern": null,
+      "rack_id": "GB200-2-12"
+    },
+    {
+      "psu_vendor": null,
+      "gpu_host_pattern": null,
+      "rack_id": "GB200-2-13"
+    },
+    {
+      "psu_vendor": null,
+      "gpu_host_pattern": null,
+      "rack_id": "GB200-2-14"
+    },
+    {
+      "psu_vendor": null,
+      "gpu_host_pattern": null,
+      "rack_id": "GB200-2-15"
+    },
+    {
+      "psu_vendor": null,
+      "gpu_host_pattern": null,
+      "rack_id": "GB200-2-16"
+    }
+  ]
+}

@@ -1,0 +1,118 @@
+apiVersion: v1
+kind: Service
+metadata:
+  name: rackpulse
+spec:
+  type: ClusterIP
+  selector:
+    app: rackpulse
+  ports:
+    - name: http
+      port: 8000
+      targetPort: http
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: rackpulse
+spec:
+  replicas: 1
+  strategy:
+    type: Recreate
+  selector:
+    matchLabels:
+      app: rackpulse
+  template:
+    metadata:
+      labels:
+        app: rackpulse
+    spec:
+      automountServiceAccountToken: false
+      terminationGracePeriodSeconds: 60
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 10001
+        runAsGroup: 10001
+        seccompProfile:
+          type: RuntimeDefault
+      initContainers:
+        - name: migrate
+          image: rackpulse:0.1.0
+          imagePullPolicy: IfNotPresent
+          command: [python, -m, alembic, upgrade, head]
+          envFrom:
+            - secretRef:
+                name: rackpulse-secrets
+          securityContext:
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+            capabilities:
+              drop: [ALL]
+          resources:
+            requests:
+              cpu: 100m
+              memory: 128Mi
+            limits:
+              cpu: '1'
+              memory: 512Mi
+      containers:
+        - name: app
+          image: rackpulse:0.1.0
+          imagePullPolicy: IfNotPresent
+          command: [python, -m, uvicorn, 'rackpulse.api:create_app', --factory, --host, 0.0.0.0, --port, '8000', --workers, '1', --no-access-log]
+          envFrom:
+            - secretRef:
+                name: rackpulse-secrets
+          env:
+            - name: RACK_CONFIG
+              value: /app/runtime-config/racks.yaml
+            - name: SCHEDULER_ENABLED
+              value: 'true'
+            - name: TZ
+              value: Asia/Shanghai
+          securityContext:
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+            capabilities:
+              drop: [ALL]
+          ports:
+            - name: http
+              containerPort: 8000
+          resources:
+            requests:
+              cpu: 250m
+              memory: 512Mi
+            limits:
+              cpu: '2'
+              memory: 2Gi
+          startupProbe:
+            httpGet:
+              path: /health
+              port: http
+            periodSeconds: 5
+            failureThreshold: 60
+          livenessProbe:
+            httpGet:
+              path: /health
+              port: http
+            periodSeconds: 20
+            timeoutSeconds: 5
+          readinessProbe:
+            httpGet:
+              path: /ready
+              port: http
+            periodSeconds: 10
+            timeoutSeconds: 5
+          volumeMounts:
+            - name: config
+              mountPath: /app/runtime-config
+              readOnly: true
+            - name: tmp
+              mountPath: /tmp
+      volumes:
+        - name: config
+          configMap:
+            name: rackpulse-config
+        - name: tmp
+          emptyDir:
+            sizeLimit: 128Mi
