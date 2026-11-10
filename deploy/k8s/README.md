@@ -2,6 +2,20 @@
 
 保留 Docker Compose，同时提供 Kustomize 部署：单实例 RackPulse Deployment + ClusterIP Service、PostgreSQL StatefulSet + 20Gi PVC、机柜 ConfigMap 和独立 Secret。使用现有应用内北京时间08:00调度，不额外创建CronJob。
 
+**完成标准：** 数据库和应用Ready → 飞书收到测试消息 → 指定日期生成真实日报 → 飞书收到该日报。只看到Pod Running不代表数据源和通知已接通。
+
+以下为Linux/Bash命令，所有路径均相对项目根目录；先执行：
+
+```sh
+git clone git@github.com:hlqs-git/RackPulse.git
+cd RackPulse
+kubectl config current-context
+kubectl get nodes
+kubectl get storageclass
+```
+
+确认当前context是要部署的集群，节点Ready；StorageClass列表应有默认类，否则按下一节指定存储类。机柜配置字段和Thanos指标要求见 [项目README](../../README.md#部署前先准备这些信息)。
+
 ## 前提
 
 需要可用集群、kubectl（内置Kustomize）、默认动态StorageClass，以及集群可拉取的RackPulse镜像。集群需能访问Thanos和飞书HTTPS。没有默认StorageClass时，在 `postgres.yaml` 的volumeClaimTemplates.spec中填写storageClassName。资源限额是初始值，按真实采集量调整。
@@ -26,6 +40,15 @@ images:
 
 私有仓库需另外创建imagePullSecret并在Deployment.spec.template.spec.imagePullSecrets中引用。本地kind等集群也可预加载 `rackpulse:0.1.0`。
 
+如果镜像仓库要求登录，应先在构建机执行 `docker login registry.example.com`。集群拉取凭据与构建机登录是两回事：按集群现有方式创建仓库Secret后，在 `app.yaml` 的 `spec.template.spec` 添加：
+
+```yaml
+imagePullSecrets:
+  - name: 你的仓库拉取Secret名称
+```
+
+该Secret必须位于 `rackpulse` 命名空间，创建步骤应放在下文创建命名空间之后。
+
 ## 2. 配置机柜与凭据
 
 在项目根目录复制并编辑：
@@ -44,7 +67,15 @@ kubectl apply -f deploy/k8s/namespace.yaml
 kubectl -n rackpulse create secret generic rackpulse-secrets --from-env-file=deploy/k8s/secrets.env
 ```
 
-更新Secret可用 `kubectl ... create secret ... --dry-run=client -o yaml | kubectl apply -f -`，注意不要把输出或环境文件提交到仓库。变更环境变量后需重启应用。数据库初始密码仅在空数据卷首次初始化时生效；已有数据库密码轮换需同步修改数据库角色密码。
+后续更新已有Secret时使用完整命令：
+
+```sh
+kubectl -n rackpulse create secret generic rackpulse-secrets \
+  --from-env-file=deploy/k8s/secrets.env --dry-run=client -o yaml | kubectl apply -f -
+kubectl -n rackpulse rollout restart deployment/rackpulse
+```
+
+不要把管道中间的Secret YAML或环境文件提交到仓库。数据库初始密码仅在空数据卷首次初始化时生效；已有数据库密码轮换需同步修改数据库角色密码。
 
 ## 3. 校验并部署
 
@@ -54,6 +85,7 @@ kubectl apply --dry-run=server -k deploy/k8s
 kubectl apply -k deploy/k8s
 kubectl -n rackpulse rollout status statefulset/postgres --timeout=300s
 kubectl -n rackpulse rollout status deployment/rackpulse --timeout=300s
+kubectl -n rackpulse get pods,pvc,svc
 kubectl -n rackpulse logs deployment/rackpulse -c migrate
 kubectl -n rackpulse logs deployment/rackpulse -c app
 ```
@@ -68,13 +100,39 @@ initContainer执行数据库迁移，成功后应用才启动；数据库尚未�
 
 ```sh
 kubectl -n rackpulse port-forward service/rackpulse 8000:8000
+```
+
+保持该终端运行，另开一个终端执行：
+
+```sh
+curl --fail http://127.0.0.1:8000/health
+curl --fail http://127.0.0.1:8000/ready
+```
+
+预期分别返回 `status: ok` 和 `status: ready`。然后检查配置和真实推送链路，将日期替换成Thanos中有数据的完整自然日：
+
+```sh
 kubectl -n rackpulse exec deployment/rackpulse -c app -- rackpulse validate-config
 kubectl -n rackpulse exec deployment/rackpulse -c app -- rackpulse test-webhook
 kubectl -n rackpulse exec deployment/rackpulse -c app -- rackpulse run --date 2026-11-09
+kubectl -n rackpulse exec deployment/rackpulse -c app -- rackpulse report --date 2026-11-09
 kubectl -n rackpulse exec deployment/rackpulse -c app -- rackpulse send --date 2026-11-09
 ```
 
-API仍要求Bearer token，详见项目README。外部访问可按现有集群规范另配Ingress/TLS。
+validate-config应返回valid；test-webhook应返回sent且飞书收到测试消息；report应有真实设备数据而不是全量缺失；最后send应返回sent且飞书收到日报。run仅返回task_id不能代表采集成功，失败或partial状态可用任务API核查。手动run不会自动发送，send才会推送。正常运行后每天北京时间08:00自动统计并发送上一日首次日报。
+
+API仍要求Bearer token，详见项目README。外部访问可按现有集群规范另配Ingress/TLS。停机错过的日报需手动补跑。
+
+## 常见部署故障
+
+| 现象 | 检查方式 |
+|---|---|
+| PVC一直Pending | `kubectl -n rackpulse describe pvc data-postgres-0`，检查StorageClass及存储配额 |
+| ImagePullBackOff | 检查镜像映射、标签、集群到仓库的网络及imagePullSecrets |
+| 应用停在Init或迁移重试 | 查看migrate日志和postgres Pod状态；核对DATABASE_URL主机名、密码及URL编码 |
+| CrashLoopBackOff | 查看 `kubectl -n rackpulse logs deployment/rackpulse -c app --previous`；检查32柜配置是否完整 |
+| Pod运行但未Ready | 查看 `/ready` 和数据库状态；Ready不检查Thanos或飞书 |
+| 部署成功但没有日报 | 执行手动run/report，检查目标日期、Thanos指标和标签；用test-webhook单独验证通知 |
 
 ## 更新、备份与卸载
 
