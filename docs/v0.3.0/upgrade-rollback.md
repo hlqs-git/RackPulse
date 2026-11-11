@@ -1,6 +1,6 @@
 # v0.3.0 升级与回滚操作设计
 
-状态：待实现与隔离环境验证，以下为操作方案，不应在当前版本上直接执行。开发会话不访问生产。
+状态：v0.3.0已发布；隔离PostgreSQL迁移与真实0.2镜像兼容测试通过。以下操作由用户核对备份后自行执行，开发会话未访问生产。
 
 ## 升级前
 
@@ -28,7 +28,7 @@ kubectl -n rackpulse logs deployment/rackpulse -c migrate
 
 旧镜像只认识0001，因此跳过该步骤会导致initContainer迁移失败。回滚不删除PVC、不恢复覆盖数据库、不删除新表。0.2不会识别卡片状态，先以SCHEDULER_ENABLED=false启动，核对已发日报后再决定恢复自动调度。0.2原有时长/显示缺陷也会恢复。
 
-最终回滚Job清单、精确CLI预览命令、digest和演练结果在实现完成后补齐；目前不将未实现命令当可执行步骤。
+可执行Job见deploy/k8s/v030-rollback-job.example.yaml。CI演练结果和镜像digest见版本说明。
 
 ## 可执行回滚清单（发布后，由用户自行执行）
 
