@@ -1,0 +1,31 @@
+# Stop the app Deployment before applying. This job changes only Alembic's
+# revision marker; 0002 downgrade deliberately preserves tables and records.
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: rackpulse-v030-logical-downgrade
+  namespace: rackpulse
+spec:
+  backoffLimit: 0
+  template:
+    spec:
+      restartPolicy: Never
+      automountServiceAccountToken: false
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 10001
+        runAsGroup: 10001
+        seccompProfile:
+          type: RuntimeDefault
+      containers:
+        - name: downgrade
+          image: ghcr.io/hlqs-git/rackpulse:0.3.0
+          command: [python, -m, alembic, downgrade, '0001']
+          envFrom:
+            - secretRef:
+                name: rackpulse-secrets
+          securityContext:
+            readOnlyRootFilesystem: true
+            allowPrivilegeEscalation: false
+            capabilities:
+              drop: [ALL]

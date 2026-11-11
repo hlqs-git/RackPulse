@@ -81,4 +81,4 @@ def test_end_to_end_rerun_sends_same_report_once(tmp_path):
         await job.run(day)
         assert (await service.send_report(day))['status'] == 'skipped'
     asyncio.run(run())
-    assert len(sent) == 1
+    assert len(sent) == 3  # Main, detail, and trend cards; rerun sends none again.

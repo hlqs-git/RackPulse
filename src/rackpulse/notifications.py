@@ -1,4 +1,6 @@
 import asyncio
+import json
+from copy import deepcopy
 import base64
 import hashlib
 import hmac
@@ -22,14 +24,17 @@ class FeishuAdapter:
 
     async def _send(self, client, text):
         for attempt in range(3):
-            payload = {'msg_type': 'text', 'content': {'text': text}}
+            payload = deepcopy(text) if isinstance(text,dict) else {'msg_type': 'text', 'content': {'text': text}}
             if self.secret:
                 stamp = str(int(time.time()))
                 key = f'{stamp}\n{self.secret}'.encode()
                 payload.update(timestamp=stamp, sign=base64.b64encode(hmac.new(key, b'', hashlib.sha256).digest()).decode())
+            if len(json.dumps(payload,ensure_ascii=False).encode())>20000:
+                return {'status':'failed','error':'payload_too_large'}
             try:
                 response = await client.post(self.url, json=payload, timeout=self.timeout)
                 if response.status_code == 429:
+                    if isinstance(text,dict):return {'status':'failed','error':'rate_limited'}
                     if attempt < 2:
                         await asyncio.sleep(2**attempt)
                         continue
@@ -40,6 +45,10 @@ class FeishuAdapter:
                     return {'status': 'failed', 'error': f'http_{response.status_code}'}
                 body = response.json()
                 code = body.get('code', body.get('StatusCode'))
+                if code==11232 and isinstance(text,dict):return {'status':'failed','error':'rate_limited'}
+                if code==11232 and attempt<2:
+                    await asyncio.sleep(2**attempt)
+                    continue
                 return {'status': 'sent'} if code == 0 else {'status': 'failed', 'error': 'business_rejected'}
             except (httpx.TransportError, ValueError):
                 return {'status': 'unknown', 'error': 'delivery_uncertain'}
@@ -54,23 +63,32 @@ class DeliveryService:
         report = self.repository.get_report(day)
         if not report:
             return {'status': 'failed', 'error': 'report_missing'}
-        text = report['text']
-        if report.get('summaries'):
-            previous = self.repository.get_report(day-timedelta(days=1))
-            text = render_report(day, report['summaries'], previous)
-            if report.get('complete') is False:
-                text = '【采集不完整】\n' + text
-        parts = split_notification(text)
-        digest = hashlib.sha256(text.encode()).hexdigest()
-        if force:
-            digest += f':forced:{time.time_ns()}'
-        if not self.repository.claim_delivery(str(day), 'feishu', digest):
-            return {'status': 'skipped', 'error': 'already_claimed'}
-        result = {'status': 'sent'}
-        for index, part in enumerate(parts):
-            result = await self.adapter.send(f'[{index+1}/{len(parts)}]\n{part}' if len(parts)>1 else part)
-            self.repository.record_part(str(day), digest, index, result)
-            if result['status'] != 'sent':
-                break
-        self.repository.finish_delivery(str(day), 'feishu', digest, result)
-        return result
+        if 'summaries' not in report:
+            return {'status':'failed','error':'legacy_report_requires_structured_summaries'}
+        from .cards import render_cards
+        from .report_model import build_report_view
+        inventory=report.get('configuration',{}).get('racks')
+        view=build_report_view(day,report,self.repository.get_report(day-timedelta(days=1)),self.repository.history(day,30),inventory)
+        cards=render_cards(view)
+        batch=hashlib.sha256(json.dumps(cards,ensure_ascii=False,sort_keys=True,separators=(',',':')).encode()).hexdigest()
+        if force: batch+=f':forced:{time.time_ns()}'
+        channel='feishu:'+hashlib.sha256(getattr(self.adapter,'url','feishu-default').encode()).hexdigest()
+        any_sent=False
+        for index,card in enumerate(cards):
+            claim,status=self.repository.claim_card(day,batch,str(index),card,channel=channel)
+            if claim is None:
+                if status=='sent': continue
+                return {'status':status if status in ('unknown','failed') else 'skipped','error':'card_unavailable','card_index':index}
+            while True:
+                try:
+                    result=await self.adapter.send(card)
+                except Exception:
+                    result={'status':'unknown','error':'adapter_interrupted'}
+                self.repository.finish_card(claim,result)
+                if result['status']=='sent':break
+                if result.get('error')!='rate_limited':return dict(result,card_index=index)
+                await asyncio.sleep(1)
+                claim,status=self.repository.claim_card(day,batch,str(index),card,channel=channel)
+                if claim is None:return dict(result,card_index=index)
+            any_sent=True
+        return {'status':'sent' if any_sent else 'skipped','cards':len(cards)}

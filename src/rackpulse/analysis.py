@@ -6,9 +6,12 @@ from datetime import datetime
 from .timewindow import TZ
 
 
-def analyze_rack(rack, samples, window, history, rules=None, previous_state=None):
+def analyze_rack(rack, samples, window, history, rules=None, previous_state=None, unknown_windows=None):
     rules = rules or {'low': 10, 'high': 80, 'load_minutes': 60, 'missing_minutes': 10}
     previous_state = previous_state or {}
+    unknown_windows = unknown_windows or []
+    def unknown(metric,t):
+        return any(m==metric and a<=t<b for m,a,b in unknown_windows)
     grid = defaultdict(dict)
     conflicts = set()
     valid_times = set(window.timestamps)
@@ -67,6 +70,11 @@ def analyze_rack(rack, samples, window, history, rules=None, previous_state=None
         flags['monitoring_missing'].append(not (u or p or g))
         flags['low_load'].append(bool(u) and mean(u.values()) < rules['low'])
         flags['high_load'].append(bool(u) and mean(u.values()) >= rules['high'])
+    for kind,values in flags.items():
+        for i,t in enumerate(window.timestamps):
+            metric='gpu_utilization' if kind in ('gpu_missing','low_load','high_load') else 'psu_power' if kind in ('psu_missing','power_increase','power_decrease') else None
+            if unknown(metric,t) if metric else any(unknown(m,t) for m in ('gpu_utilization','gpu_power','psu_power')):
+                values[i]=None
     for value in power.values():
         values = value.pop('values')
         value['average_watts'] = mean(values) if values else None
@@ -77,29 +85,35 @@ def analyze_rack(rack, samples, window, history, rules=None, previous_state=None
     def intervals(kind, values, device=None):
         key = f'{kind}|{device or ""}'
         previous = previous_state.get(key)
-        start = 0 if previous else None
+        first=previous['started_at'] if previous else None
+        known_before=previous['duration_minutes'] if previous else 0
+        day_count=0
+        uncertain=bool(previous and previous.get('observation_status')=='unknown')
         def iso(index):
-            return datetime.fromtimestamp(int(window.start.timestamp())+index*60, TZ).isoformat()
-        for i, active in enumerate(values+[False]):
-            if active and start is None:
-                start = i
-            if not active and start is not None:
-                carry = previous if start == 0 else None
-                duration = i-start+(carry['duration_minutes'] if carry else 0)
-                event = {'rack_id': rack.rack_id, 'device': device, 'type': kind, 'severity': 'Critical' if kind == 'monitoring_missing' else 'Info' if kind.endswith('load') else 'Warning', 'started_at': carry['started_at'] if carry else iso(start), 'recovered_at': iso(i) if i < 1440 else None, 'duration_minutes': duration, 'suggestion': '可能为负载变化或采集链路异常，请核对原始监控与设备状态。'}
-                if duration >= thresholds.get(kind, 1):
-                    events.append(event)
-                if i == 1440:
-                    state[key] = event
-                start = None
-                previous = None
+            return datetime.fromtimestamp(int(window.start.timestamp())+index*60,TZ).isoformat()
+        def finish(index, recovered):
+            total=known_before+day_count
+            event=dict(rack_id=rack.rack_id,device=device,type=kind,severity='Critical' if kind=='monitoring_missing' else 'Info' if kind.endswith('load') else 'Warning',started_at=first,first_occurred_at=first,recovered_at=iso(index) if recovered else None,duration_minutes=total,day_duration_minutes=day_count,total_duration_minutes=total,time_basis='observed_minutes',observation_status='unknown' if uncertain else 'observed',suggestion='请核对原始监控。')
+            if total>=thresholds.get(kind,1):events.append(event)
+            if not recovered:state[key]=event
+        for i,active in enumerate(values):
+            if active is None:
+                if first is not None:uncertain=True
+                continue
+            if active:
+                if first is None:first=iso(i)
+                day_count+=1
+            elif first is not None:
+                finish(i,True)
+                first=None;known_before=0;day_count=0;uncertain=False
+        if first is not None:finish(1440,False)
     for kind, values in flags.items():
         intervals(kind, values)
     for metric, identities, kind in [('gpu_utilization', gpu_ids, 'gpu_device_missing'), ('psu_power', psu_ids, 'psu_device_missing')]:
         identities = identities | {e['device'] for e in previous_state.values() if isinstance(e, dict) and e.get('type') == kind and e.get('device')}
         for device in sorted(identities):
-            intervals(kind, [device not in grid[(t, metric)] for t in window.timestamps], device)
+            intervals(kind, [None if unknown(metric,t) else device not in grid[(t, metric)] for t in window.timestamps], device)
     for event in events:
         event.setdefault('metric_value', None)
         event['rule_version'] = '1'
-    return {'rack_id': rack.rack_id, 'psu_vendor': rack.psu_vendor, 'valid_gpu_minutes': gpu_minutes, 'gpu_count': len(gpu_ids), 'psu_count': len(psu_ids), 'gpu_completeness': gpu_minutes/(rack.expected_gpu*1440), 'psu_completeness': psu_minutes/(rack.expected_psu*1440), 'gpu_average_utilization': mean(utils) if utils else None, 'gpu_maximum_utilization': max(utils) if utils else None, 'gpu_average_power_watts': mean(gpu_powers) if gpu_powers else None, 'gpu_maximum_power_watts': max(gpu_powers) if gpu_powers else None, 'high_load_ratio': high/len(utils) if utils else None, 'low_load_ratio': low/len(utils) if utils else None, 'missing_minutes': sum(flags['monitoring_missing']), 'power': power, 'events': events, 'full_psu_device_sets': [list(s) for s in sorted(full_sets)], 'duplicate_conflicts': len(conflicts), 'power_baseline_status': 'available' if any(len(v)>=3 for v in baselines.values()) else 'insufficient_history', 'rule_state': state}
+    return {'rack_id': rack.rack_id, 'psu_vendor': rack.psu_vendor, 'valid_gpu_minutes': gpu_minutes, 'gpu_count': len(gpu_ids), 'psu_count': len(psu_ids), 'gpu_completeness': gpu_minutes/(rack.expected_gpu*1440), 'psu_completeness': psu_minutes/(rack.expected_psu*1440), 'gpu_average_utilization': mean(utils) if utils else None, 'gpu_maximum_utilization': max(utils) if utils else None, 'gpu_average_power_watts': mean(gpu_powers) if gpu_powers else None, 'gpu_maximum_power_watts': max(gpu_powers) if gpu_powers else None, 'high_load_ratio': high/len(utils) if utils else None, 'low_load_ratio': low/len(utils) if utils else None, 'missing_minutes': sum(v is True for v in flags['monitoring_missing']), 'power': power, 'events': events, 'full_psu_device_sets': [list(s) for s in sorted(full_sets)], 'duplicate_conflicts': len(conflicts), 'power_baseline_status': 'available' if any(len(v)>=3 for v in baselines.values()) else 'insufficient_history', 'rule_state': state}

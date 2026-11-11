@@ -14,6 +14,9 @@ deliveries = Table('deliveries', metadata, Column('id', String, primary_key=True
 parts = Table('delivery_parts', metadata, Column('key', String, primary_key=True), Column('payload', JSON))
 states = Table('rule_states', metadata, Column('day', String, primary_key=True), Column('payload', JSON))
 
+card_deliveries = Table('card_deliveries',metadata,Column('id',String,primary_key=True),Column('day',String),Column('channel',String),Column('batch_hash',String),Column('card_key',String),Column('payload',JSON),Column('status',String),Column('attempts',Integer),UniqueConstraint('day','channel','batch_hash','card_key'))
+card_attempts = Table('card_delivery_attempts',metadata,Column('id',String,primary_key=True),Column('card_id',String),Column('started_at',String),Column('finished_at',String),Column('result',JSON))
+
 
 class Repository:
     def __init__(self, url):
@@ -119,4 +122,28 @@ class Repository:
 
     def recover_deliveries(self):
         with self.engine.begin() as conn:
+            conn.execute(update(card_deliveries).where(card_deliveries.c.status=='sending').values(status='unknown'))
             conn.execute(update(deliveries).where(deliveries.c.status == 'sending').values(status='unknown', result={'error': 'process_interrupted'}))
+
+    def claim_card(self, day, batch, key, payload, channel='feishu'):
+        card_id=hashlib.sha256(f'{day}:{channel}:{batch}:{key}'.encode()).hexdigest()
+        now=datetime.now(timezone.utc).isoformat()
+        try:
+            with self.engine.begin() as conn:
+                conn.execute(insert(card_deliveries).values(id=card_id,day=str(day),channel=channel,batch_hash=batch,card_key=key,payload=payload,status='pending',attempts=0))
+        except IntegrityError:
+            pass
+        with self.engine.begin() as conn:
+            changed=conn.execute(update(card_deliveries).where(card_deliveries.c.id==card_id,card_deliveries.c.status.in_(['pending','failed']),card_deliveries.c.attempts<3).values(status='sending',attempts=card_deliveries.c.attempts+1)).rowcount
+            if not changed:
+                status=conn.execute(select(card_deliveries.c.status).where(card_deliveries.c.id==card_id)).scalar()
+                return None,status
+            attempt_id=str(uuid.uuid4())
+            conn.execute(insert(card_attempts).values(id=attempt_id,card_id=card_id,started_at=now))
+            return (card_id,attempt_id),'sending'
+
+    def finish_card(self, claim, result):
+        card_id,attempt_id=claim
+        with self.engine.begin() as conn:
+            conn.execute(update(card_deliveries).where(card_deliveries.c.id==card_id).values(status=result['status']))
+            conn.execute(update(card_attempts).where(card_attempts.c.id==attempt_id).values(finished_at=datetime.now(timezone.utc).isoformat(),result=result))
