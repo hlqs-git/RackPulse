@@ -1,6 +1,6 @@
 """Feishu static interactive cards and identical textual preview."""
 import json
-from .report import notification_events, NAMES, MONITORING, SOURCES
+from collections import defaultdict
 
 
 def _fmt(v,scale=1,digits=1):
@@ -62,15 +62,35 @@ def render_cards(view, max_bytes=18000):
     for label,title in [('gpu','GPU'),('psu','PSU')]:
         values=[counts(r,label) for r in sorted(ids)]
         def total(key):return sum(c[key] for c in values) if all(c.get(key) is not None for c in values) else None
-        main.append(f"{title} 采集\n**{shown(total('actual'))} / {shown(total('expected'))}**")
+        actual,expected=total('actual'),total('expected')
+        gap=sum(max(0,c['expected']-c['actual']) for c in values) if all(c.get('actual') is not None and c.get('expected') is not None for c in values) else None
+        main.append(f"{title} 采集：**{shown(actual)} / {shown(expected)}** · 缺口 {shown(gap)}")
     if attention:
-        main.append('**异常详情 / 待确认**')
-        for rack in sorted(attention):
-            reasons=issues.get(rack,[])+[f'待确认：{reason}' for reason in pending.get(rack,[])]
-            main.append(f"**{rack}**：{'；'.join(reasons)}")
-    main.append(f'{len(ids)} 个机柜 · 监控异常 {len(issues)} 个'+(f' · 待确认 {len(pending)} 个' if pending else ''))
-    main.append('设备健康：未判定；以上仅反映监控采集状态。')
-    card=_card(f'RackPulse 每日监控｜{day}',main)
+        grouped=defaultdict(set)
+        for rack in attention:
+            for reason in issues.get(rack,[]):grouped[('异常',reason)].add(rack)
+            for reason in pending.get(rack,[]):grouped[('待确认',reason)].add(rack)
+        common={'日报采集不完整','GPU历史数据不足','PSU历史数据不足','无日报数据','GPU完整性未知','PSU完整性未知','GPU采样覆盖未知','PSU采样覆盖未知'}
+        def priority(item):
+            (state,reason),racks=item
+            return (0 if '查询' in reason or '品牌' in reason else 2 if reason in common else 1,reason,state)
+        groups=sorted(grouped.items(),key=priority)
+        def detail(item,locate=True):
+            (state,reason),racks=item
+            text=f'{state}：{reason}（{len(racks)} 个机柜）'
+            if locate and reason not in common:
+                names=sorted(racks)
+                text+='：'+ '、'.join(names[:3])+(f'等{len(names)}柜' if len(names)>3 else '')
+            return text
+        main.append('**问题汇总**')
+        visible=groups if len(groups)<=5 else groups[:4]
+        main.extend(detail(item) for item in visible)
+        if len(groups)>5:
+            rest=groups[4:]
+            remaining=set().union(*(racks for key,racks in rest))
+            main.append(f'其余 {len(rest)} 类问题（涉及 {len(remaining)} 个机柜）：'+'；'.join(detail(item,False) for item in rest))
+    main.append(f'{len(ids)} 个机柜 · 监控异常 {len(issues)} 个'+(f' · 待确认 {len(pending)} 个' if pending else '')+' · 设备健康：未判定')
+    card=_card(f'{status}｜RackPulse 每日监控｜{day}',main)
     card['card']['header']['template']={'正常':'green','异常':'red','待确认':'orange'}[status]
     cards=[card]
     result=[]

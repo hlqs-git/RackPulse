@@ -7,7 +7,7 @@ from rackpulse.notifications import DeliveryService
 def test_failed_card_retry_does_not_resend_confirmed_card(tmp_path,monkeypatch):
     from rackpulse import cards
     original=cards.render_cards
-    monkeypatch.setattr(cards,"render_cards",lambda view: original(view,max_bytes=1400))
+    monkeypatch.setattr(cards,"render_cards",lambda view: original(view,max_bytes=650))
     repo=Repository('sqlite:///'+str(tmp_path/'cards.db'));repo.initialize()
     repo.publish_report(date(2026,11,10),{'summaries':[],'text':'old'})
     class Adapter:

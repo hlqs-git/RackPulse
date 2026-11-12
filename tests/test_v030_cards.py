@@ -10,7 +10,7 @@ def test_all_32_racks_and_same_preview_payload():
     cards=render_cards(view)
     assert len(cards)==1
     encoded=json.dumps(cards,ensure_ascii=False)
-    for rack in inventory:
-        assert encoded.count('**'+rack['rack_id']+'**')==1
+    assert '32 个机柜' in encoded
+    assert 'GB200-' not in encoded  # Common missing-report reason is aggregated.
     assert '设备健康' in render_preview(view)
     assert all(c['msg_type']=='interactive' for c in cards)
