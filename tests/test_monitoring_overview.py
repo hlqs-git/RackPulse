@@ -19,7 +19,7 @@ def test_device_categories_are_counted_individually():
 def test_old_report_does_not_invent_device_categories():
     report={'summaries':[dict(rack_id='GB200-1-1',gpu_count=68,psu_count=48,gpu_completeness=.9,psu_completeness=1,events=[])]}
     text=render_preview(build_report_view(date(2026,11,11),report,inventory=[dict(rack_id='GB200-1-1')]))
-    assert 'GPU 应监控' in text and 'PSU 应监控' in text
-    assert 'GPU缺4张' in text
+    assert 'GPU 采集' in text and 'PSU 采集' in text
+    assert '待确认' in text
     assert '历史' in text
     assert 'MWh' not in text and '趋势' not in text

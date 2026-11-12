@@ -27,34 +27,52 @@ def render_cards(view, max_bytes=18000):
         # Historical rack averages cannot recover per-device quality categories.
         return dict(expected=expected,actual=actual,normal=None,degraded=None,unavailable=None)
     def shown(value):return '—' if value is None else str(value)
-    main=[f'机柜总数：{len(ids)} · 设备健康：未判定（采集缺失不等于硬件故障）']
-    for label,title,unit in [('gpu','GPU','张'),('psu','PSU','路')]:
-        values=[counts(r,label) for r in sorted(ids)]
-        def total(key):return sum(c[key] for c in values) if all(c.get(key) is not None for c in values) else None
-        main.append(f"**{title} 监控**\n{title} 应监控：{shown(total('expected'))}{unit} · 实际采集：{shown(total('actual'))}{unit}\n监控正常：{shown(total('normal'))} · 监控降级：{shown(total('degraded'))} · 监控不可用：{shown(total('unavailable'))}")
-    statuses={}
-    for rack in ids:
-        if rack not in records:statuses[rack]='无日报数据，待确认';continue
-        parts=[]
+    issues={}; pending={}
+    for rack in sorted(ids):
+        record=records.get(rack)
+        if record is None:
+            pending[rack]=['无日报数据'];continue
+        confirmed=[]; uncertain=[]
+        if report.get('complete') is False or report.get('errors'):
+            uncertain.append('日报采集不完整')
+        events=record.get('events',[])
+        if any(e.get('type')=='datasource_error' for e in events):uncertain.append('查询失败')
+        if any(e.get('type')=='brand_conflict' for e in events):uncertain.append('PSU品牌配置冲突')
         for label,title,unit in [('gpu','GPU','张'),('psu','PSU','路')]:
             c=counts(rack,label)
-            if c['actual'] is None:parts.append(title+'统计未知')
-            elif c['actual']>c['expected']:parts.append(title+'数量超配')
-            elif c['actual']<c['expected']:parts.append(f"{title}缺{c['expected']-c['actual']}{unit}")
-            if c.get('query_complete') is False:parts.append(title+'查询不完整')
-            if c.get('degraded',0):parts.append(title+'采集降级')
-            elif records[rack].get(label+'_completeness',1)<.95:parts.append(title+'采样覆盖不足')
-        if any(e.get('type')=='datasource_error' for e in records[rack].get('events',[])):parts.append('数据源查询异常')
-        statuses[rack]='；'.join(parts) or '数量齐全'
-    main.append('**机柜汇总**\n机柜 | GPU应监控 | GPU实际 | PSU应监控 | PSU实际 | 监控状态')
-    def order(r):
-        bits=r.split('-')
-        return (statuses[r]=='数量齐全',int(bits[-2]) if len(bits)>2 and bits[-2].isdigit() else 999,int(bits[-1]) if bits[-1].isdigit() else 999,r)
-    for rack in sorted(ids,key=order):
-        gpu,psu=counts(rack,'gpu'),counts(rack,'psu')
-        main.append(f"**{rack}** | {gpu['expected']} | {shown(gpu['actual'])} | {psu['expected']} | {shown(psu['actual'])} | {statuses[rack]}")
-    main.append('口径：实际采集=当天至少1次有效采样；正常=单设备采样完整率≥95%；降级=已采到但不足95%；不可用=确认全天无有效采样。历史报告缺少设备级统计或查询失败时对应分类显示—，不推算。')
-    cards=[_card(f'RackPulse 每日监控概览｜{day}',main)]
+            if c.get('query_complete') is not True:
+                uncertain.append(title+('查询不完整' if c.get('query_complete') is False else '历史数据不足'))
+                continue
+            actual=c.get('actual');expected=c['expected']
+            if actual is None or actual==0:
+                uncertain.append(title+'无有效数据');continue
+            if actual<expected:confirmed.append(f'{title} 少采集 {expected-actual} {unit}')
+            elif actual>expected:confirmed.append(title+'采集数量超配')
+            if c.get('degraded') is None or c.get('normal') is None:uncertain.append(title+'完整性未知')
+            elif c['degraded']>0:confirmed.append(title+'采集降级')
+            completeness=record.get(label+'_completeness')
+            if completeness is None:uncertain.append(title+'采样覆盖未知')
+            elif completeness<.95 and title+'采集降级' not in confirmed:confirmed.append(title+'采样覆盖不足')
+        if confirmed:issues[rack]=confirmed
+        if uncertain:pending[rack]=uncertain
+    attention=set(issues)|set(pending)
+    status='待确认' if pending else '异常' if issues else '正常'
+    headline=f'{status} · {len(attention)} 个机柜需关注' if attention else '正常 · 无监控异常'
+    main=[f'**{headline}**']
+    for label,title in [('gpu','GPU'),('psu','PSU')]:
+        values=[counts(r,label) for r in sorted(ids)]
+        def total(key):return sum(c[key] for c in values) if all(c.get(key) is not None for c in values) else None
+        main.append(f"{title} 采集\n**{shown(total('actual'))} / {shown(total('expected'))}**")
+    if attention:
+        main.append('**异常详情 / 待确认**')
+        for rack in sorted(attention):
+            reasons=issues.get(rack,[])+[f'待确认：{reason}' for reason in pending.get(rack,[])]
+            main.append(f"**{rack}**：{'；'.join(reasons)}")
+    main.append(f'{len(ids)} 个机柜 · 监控异常 {len(issues)} 个'+(f' · 待确认 {len(pending)} 个' if pending else ''))
+    main.append('设备健康：未判定；以上仅反映监控采集状态。')
+    card=_card(f'RackPulse 每日监控｜{day}',main)
+    card['card']['header']['template']={'正常':'green','异常':'red','待确认':'orange'}[status]
+    cards=[card]
     result=[]
     for card in cards:
         elements=card['card']['elements']; current=[]
