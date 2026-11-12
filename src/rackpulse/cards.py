@@ -17,55 +17,44 @@ def render_cards(view, max_bytes=18000):
     ids={r['rack_id'] for r in view.get('inventory',[])}|set(records)
     if not ids:
         ids={f'GB200-{p}-{i}' for p in (1,2) for i in range(1,17)}
-    events=notification_events([dict(e,duration_minutes=e.get('day_duration_minutes') if e.get('day_duration_minutes') is not None else e.get('duration_minutes',0)) for s in summaries for e in s.get('events',[])])
-    monitoring={e['rack_id'] for e in events if e['type'] in MONITORING or 'collection_missing' in e['type']}
-    abnormal={e['rack_id'] for e in events}
-    weight=sum(s.get('valid_gpu_minutes',0) for s in summaries if s.get('gpu_average_utilization') is not None)
-    util=sum(s['gpu_average_utilization']*s.get('valid_gpu_minutes',0) for s in summaries if s.get('gpu_average_utilization') is not None)/weight if weight else None
-    full=[s['power']['full_psu'] for s in summaries if s.get('power',{}).get('full_psu',{}).get('minutes',0)>0]
-    energy=sum(p['energy_kwh'] for p in full if p['energy_kwh'] is not None) if full else None
-    old={s['rack_id']:s for s in (view.get('previous') or {}).get('summaries',[])}
-    comparable=[s for s in summaries if s['rack_id'] in old and s['power']['full_psu']['minutes']==1440 and old[s['rack_id']]['power']['full_psu']['minutes']==1440 and s['psu_vendor']==old[s['rack_id']]['psu_vendor'] and s['full_psu_device_sets']==old[s['rack_id']]['full_psu_device_sets']]
-    delta=sum(s['power']['full_psu']['energy_kwh']-old[s['rack_id']]['power']['full_psu']['energy_kwh'] for s in comparable) if comparable else None
-    main=[f'机柜 **{len(ids)}** · 异常机柜 **{len(abnormal)}**（监控{len(monitoring)}） · GPU利用率 **{_fmt(util)}%**',f'完整PSU可观测能耗 **{_fmt(energy,1000,3)} MWh**\n昨日同口径变化 {_fmt(delta,1000,3)} MWh（{len(comparable)}柜）',f"任务执行：{report.get('execution_status','历史记录/未知')} · 采集：{report.get('collection_status','未知')}\n监控链路：{'降级' if monitoring else '未知' if not summaries else '未发现重点异常'} · 设备健康：未知（无直接健康指标）"]
-    def event_line(e):
-        day_duration=e.get('day_duration_minutes'); total=e.get('total_duration_minutes')
-        return f"[{e['severity']}] {e['rack_id']} {NAMES.get(e['type'],e['type'])}\n首次 {e.get('first_occurred_at') or e['started_at']} · 当天 {_fmt(day_duration)}分钟 · 累计 {_fmt(total)}分钟\n恢复 {e.get('recovered_at') or '未证实恢复'}"
-    main+= [event_line(e) for e in events[:10]] or ['无重点异常；数据缺失不能证明设备故障。']
-    cards=[_card(f'RackPulse {day} 日报',main)]
-    for pod in (1,2,'其他'):
-        group=[r for r in ids if (r.startswith(f'GB200-{pod}-') if pod!='其他' else not r.startswith(('GB200-1-','GB200-2-')))]
-        if not group: continue
-        group.sort(key=lambda r:(r not in monitoring,int(r.split('-')[-1]) if r.split('-')[-1].isdigit() else 999,r))
-        rows=[]
-        for rack in group:
-            s=records.get(rack)
-            if not s:
-                rows.append(f'**{rack}** · 未采集\n利用率/均值/峰值/能耗/GPU完整率/PSU完整率：—')
-                continue
-            power=[]
-            for source,label in SOURCES.items():
-                p=s.get('power',{}).get(source,{})
-                if p.get('minutes',0)>0:
-                    power.append(f"{label}：均值{_fmt(p.get('average_watts'),1000)} / 峰值{_fmt(p.get('maximum_watts'),1000)} kW · {_fmt(p.get('energy_kwh'),1000,3)} MWh · {p['minutes']}/1440分")
-            rows.append(f"**{rack}** · {'监控异常' if rack in monitoring else '指标波动' if rack in abnormal else '采集状态见完整率'}\nGPU {_fmt(s.get('gpu_average_utilization'))}% · 完整率 GPU {_fmt(s.get('gpu_completeness')*100 if s.get('gpu_completeness') is not None else None)}% / PSU {_fmt(s.get('psu_completeness')*100 if s.get('psu_completeness') is not None else None)}%\n"+('\n'.join(power) or '功率/峰值/可观测能耗：—'))
-        cards.append(_card(f'{day} POD{pod} 明细',rows))
-    from .trends import build_trends, rank_idle_power
-    history=view.get('history',[])
-    if history or summaries:
-        from datetime import date
-        lines=[]
-        for days in (7,30):
-            points=build_trends(date.fromisoformat(day),history+[dict(report,day=day)],days)
-            lines.append(f'**{days}日趋势（可观测量，不外推缺失日）**')
-            for point in points:
-                lines.append(f"{point['day']} GPU {_fmt(point['gpu_utilization'])}% · 完整PSU {_fmt(point['full_psu_mwh'],digits=3)} / 部分PSU {_fmt(point['partial_psu_mwh'],digits=3)} / GPU代理 {_fmt(point['gpu_proxy_mwh'],digits=3)} MWh · 完整覆盖{_fmt(point['full_psu_coverage']*100 if point['full_psu_coverage'] is not None else None)}%")
-        cards.append(_card(f'{day} 7/30日趋势',lines))
-    ranks=rank_idle_power(summaries,low=report.get('rules',{}).get('low',10),coverage=report.get('rules',{}).get('rank_coverage',.95))
-    if ranks:
-        cards.append(_card(f'{day} 低利用率高功耗排名',[f"{s['rack_id']} GPU {_fmt(s['gpu_average_utilization'])}% · 完整PSU {_fmt(s['power']['full_psu']['average_watts'],1000)} kW" for s in ranks[:10]]))
-    if len(events)>10:
-        cards.append(_card(f'{day} 重点异常续页',[event_line(e) for e in events[10:]]))
+    inventory={r['rack_id']:r for r in view.get('inventory',[])}
+    def counts(rack,label):
+        record=records.get(rack)
+        expected=inventory.get(rack,{}).get('expected_'+label,72 if label=='gpu' else 48)
+        if not record:return dict(expected=expected,actual=None,normal=None,degraded=None,unavailable=None)
+        if record.get('monitoring_counts',{}).get(label):return record['monitoring_counts'][label]
+        actual=record.get(label+'_count')
+        # Historical rack averages cannot recover per-device quality categories.
+        return dict(expected=expected,actual=actual,normal=None,degraded=None,unavailable=None)
+    def shown(value):return '—' if value is None else str(value)
+    main=[f'机柜总数：{len(ids)} · 设备健康：未判定（采集缺失不等于硬件故障）']
+    for label,title,unit in [('gpu','GPU','张'),('psu','PSU','路')]:
+        values=[counts(r,label) for r in sorted(ids)]
+        def total(key):return sum(c[key] for c in values) if all(c.get(key) is not None for c in values) else None
+        main.append(f"**{title} 监控**\n{title} 应监控：{shown(total('expected'))}{unit} · 实际采集：{shown(total('actual'))}{unit}\n监控正常：{shown(total('normal'))} · 监控降级：{shown(total('degraded'))} · 监控不可用：{shown(total('unavailable'))}")
+    statuses={}
+    for rack in ids:
+        if rack not in records:statuses[rack]='无日报数据，待确认';continue
+        parts=[]
+        for label,title,unit in [('gpu','GPU','张'),('psu','PSU','路')]:
+            c=counts(rack,label)
+            if c['actual'] is None:parts.append(title+'统计未知')
+            elif c['actual']>c['expected']:parts.append(title+'数量超配')
+            elif c['actual']<c['expected']:parts.append(f"{title}缺{c['expected']-c['actual']}{unit}")
+            if c.get('query_complete') is False:parts.append(title+'查询不完整')
+            if c.get('degraded',0):parts.append(title+'采集降级')
+            elif records[rack].get(label+'_completeness',1)<.95:parts.append(title+'采样覆盖不足')
+        if any(e.get('type')=='datasource_error' for e in records[rack].get('events',[])):parts.append('数据源查询异常')
+        statuses[rack]='；'.join(parts) or '数量齐全'
+    main.append('**机柜汇总**\n机柜 | GPU应监控 | GPU实际 | PSU应监控 | PSU实际 | 监控状态')
+    def order(r):
+        bits=r.split('-')
+        return (statuses[r]=='数量齐全',int(bits[-2]) if len(bits)>2 and bits[-2].isdigit() else 999,int(bits[-1]) if bits[-1].isdigit() else 999,r)
+    for rack in sorted(ids,key=order):
+        gpu,psu=counts(rack,'gpu'),counts(rack,'psu')
+        main.append(f"**{rack}** | {gpu['expected']} | {shown(gpu['actual'])} | {psu['expected']} | {shown(psu['actual'])} | {statuses[rack]}")
+    main.append('口径：实际采集=当天至少1次有效采样；正常=单设备采样完整率≥95%；降级=已采到但不足95%；不可用=确认全天无有效采样。历史报告缺少设备级统计或查询失败时对应分类显示—，不推算。')
+    cards=[_card(f'RackPulse 每日监控概览｜{day}',main)]
     result=[]
     for card in cards:
         elements=card['card']['elements']; current=[]

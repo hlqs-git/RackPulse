@@ -4,7 +4,10 @@ from rackpulse.repository import Repository
 from rackpulse.notifications import DeliveryService
 
 
-def test_failed_card_retry_does_not_resend_confirmed_card(tmp_path):
+def test_failed_card_retry_does_not_resend_confirmed_card(tmp_path,monkeypatch):
+    from rackpulse import cards
+    original=cards.render_cards
+    monkeypatch.setattr(cards,"render_cards",lambda view: original(view,max_bytes=1400))
     repo=Repository('sqlite:///'+str(tmp_path/'cards.db'));repo.initialize()
     repo.publish_report(date(2026,11,10),{'summaries':[],'text':'old'})
     class Adapter:
@@ -19,7 +22,8 @@ def test_failed_card_retry_does_not_resend_confirmed_card(tmp_path):
         assert (await service.send_report(date(2026,11,10)))['status']=='sent'
         assert (await service.send_report(date(2026,11,10)))['status']=='skipped'
     asyncio.run(run())
-    assert len(adapter.calls)==4
+    assert len(adapter.calls)>2
+    assert adapter.calls.count(adapter.calls[0])==1
     assert isinstance(adapter.calls[0],dict)
 
 

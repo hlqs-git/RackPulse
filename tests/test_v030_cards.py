@@ -8,7 +8,7 @@ def test_all_32_racks_and_same_preview_payload():
     inventory=[{'rack_id':f'GB200-{p}-{i}'} for p in (1,2) for i in range(1,17)]
     view=build_report_view(date(2026,11,10),{'summaries':[]},inventory=inventory)
     cards=render_cards(view)
-    assert len(cards)==3
+    assert len(cards)==1
     encoded=json.dumps(cards,ensure_ascii=False)
     for rack in inventory:
         assert encoded.count('**'+rack['rack_id']+'**')==1
